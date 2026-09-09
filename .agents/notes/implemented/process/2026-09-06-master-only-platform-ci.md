@@ -20,6 +20,8 @@ This decision partially supersedes scheduling in the [installed-wheel validation
 
 ## Alternatives considered
 
+**Require upstream credentials and runner pools in every fork.** Forks do not inherit either resource. Keyless validation remains automatic; paid tests and self-hosted standbys require explicit repository configuration outside the upstream repository.
+
 **Keep every target and Wine required on pull requests.** This detects platform-specific defects before merge but repeats paid native builds for every revision. The chosen policy explicitly accepts post-merge discovery for these four checks.
 
 **Wait until release or require manual dispatch.** This loses the automatic default-branch signal. Master pushes retain scheduled checks without shrinking the release matrix.
@@ -27,6 +29,10 @@ This decision partially supersedes scheduling in the [installed-wheel validation
 **Fold Wine into a self-hosted serial aggregate.** The aggregate does not already cover Wine. Adding it would change persistent-host dependencies, shared cache ownership, and cleanup isolation; the scheduling optimization does not need that migration.
 
 ## Consequences
+
+Outside `deepseek-ai/deepseek-harness`, `DSH_CI_REAL_API=true` opts into the real DeepSeek e2e job and installed-wheel live API steps. Manual dispatch also opts into the dedicated e2e job. Enabled live tests still fail when `DEEPSEEK_API_KEY_EXTERNAL` is missing, and fork-origin or Dependabot pull requests remain excluded. Keyless installed-wheel steps retain their platform-only conditions. Each master standby requires its matching `DSH_CI_FAILOVER_LINUX=selfhosted` or `DSH_CI_FAILOVER_WINDOWS=selfhosted` setting in forks; upstream retains automatic standbys. The workflow regression evaluates enabled and excluded events, platform-independent switches, and unchanged keyless steps.
+
+The desktop transaction fixture publishes its complete worker PID by renaming a completed temporary file. File existence therefore signals readable readiness; it cannot expose the empty file created before a write completes. The transaction test retains the live lock-owner assertion and waits for the worker to exit during cleanup.
 
 A macOS, Linux ARM64, or Wine-specific regression can merge while required PR checks are green. Master failures remain ordinary failing jobs, not `continue-on-error` observations. Linux/Windows x64 installed-wheel checks and native Windows build/process checks continue to block the PR aggregate; its dependencies never name the removed Wine PR job.
 

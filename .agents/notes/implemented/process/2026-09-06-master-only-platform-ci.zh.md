@@ -20,6 +20,8 @@ Wine 作为独立的托管 Ubuntu master 作业运行一次。其现有的按镜
 
 ## Alternatives considered
 
+**要求每个 Fork 都具备上游凭据和运行器池。** Fork 不会继承这两类资源。无密钥验证仍自动运行；在上游仓库之外，付费测试和自托管备用检查需要显式配置仓库。
+
 **在拉取请求上保留全部目标和 Wine 必需检查。** 这能在合并前发现平台特定缺陷，但会在每次修订时重复付费原生构建。所选策略明确接受这四项检查在合并后发现问题。
 
 **等到发布或要求手动派发。** 这会失去自动的默认分支信号。master 推送保留定期触发的检查，不缩减发布矩阵。
@@ -27,6 +29,10 @@ Wine 作为独立的托管 Ubuntu master 作业运行一次。其现有的按镜
 **把 Wine 合入自托管串行聚合。** 聚合并未覆盖 Wine。加入它会改变持久宿主机依赖、共享缓存归属与清理隔离；此次调度优化不需要这种迁移。
 
 ## Consequences
+
+在 `deepseek-ai/deepseek-harness` 之外，`DSH_CI_REAL_API=true` 启用真实 DeepSeek e2e 作业及安装后 wheel 包的 live API 步骤。手动派发也会启用专用 e2e 作业。已启用的 live 测试在缺少 `DEEPSEEK_API_KEY_EXTERNAL` 时仍明确失败，来自 Fork 或 Dependabot 的拉取请求仍被排除。无密钥安装后 wheel 包步骤保留仅依赖平台的条件。在 Fork 中，每个 master 备用检查都要求对应的 `DSH_CI_FAILOVER_LINUX=selfhosted` 或 `DSH_CI_FAILOVER_WINDOWS=selfhosted` 设置；上游保留自动备用检查。工作流回归测试求值启用和排除的事件、相互独立的平台开关以及保持不变的无密钥步骤。
+
+桌面事务夹具通过重命名已写完的临时文件来发布完整的 worker PID。因此，文件存在即表示就绪信息可读，不会暴露写入完成前创建的空文件。事务测试保留对实际锁所有者的断言，并在清理时等待 worker 退出。
 
 macOS、Linux ARM64 或 Wine 特定回归可能在必需 PR 检查为绿时合并。master 失败仍是普通失败作业，不是 `continue-on-error` 观测项。Linux/Windows x64 安装后 wheel 包检查及原生 Windows 构建和进程检查继续阻塞 PR 聚合；其依赖绝不引用已移除的 Wine PR 作业。
 

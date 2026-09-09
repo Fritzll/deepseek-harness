@@ -135,9 +135,11 @@ function writeBlockingFakePnpm(root: string, ready: string, release: string): st
   const path = join(root, 'blocking-pnpm.mjs')
   const delegate = writeFakePnpm(root)
   writeFileSync(path, `
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, renameSync, writeFileSync } from 'node:fs'
 import { setTimeout as sleep } from 'node:timers/promises'
-writeFileSync(${JSON.stringify(ready)}, String(process.pid))
+// Publish readiness only after the complete PID is visible to the parent.
+writeFileSync(${JSON.stringify(`${ready}.tmp`)}, String(process.pid))
+renameSync(${JSON.stringify(`${ready}.tmp`)}, ${JSON.stringify(ready)})
 while (!existsSync(${JSON.stringify(release)})) await sleep(10)
 await import(${JSON.stringify(pathToFileURL(delegate).href)})
 `)
