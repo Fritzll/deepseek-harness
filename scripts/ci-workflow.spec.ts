@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { runInNewContext } from 'node:vm'
 import * as yaml from 'js-yaml'
 import { describe, expect, it } from 'vitest'
 
@@ -209,7 +210,7 @@ describe('CI workflow', () => {
     expect(windowsObservational['continue-on-error']).toBe(true)
 
     // serial-windows: master-only standby, self-hosted, non-blocking, lives in ci-master.
-    expect(serialWindows.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/master'")
+    expect(serialWindows.if).toContain("github.event_name == 'push' && github.ref == 'refs/heads/master'")
     expect(serialWindows['runs-on']).toEqual(['self-hosted', 'dsh-win-ci', 'windows'])
     expect(serialWindows.name).toBe('serial / windows (self-hosted standby)')
     // Its store must share the ReFS workspace volume for clone; the install
@@ -389,7 +390,7 @@ describe('CI workflow', () => {
       if (!isRecord(job)) throw new TypeError(`${name} must be defined`)
       expect(job.concurrency).toBeUndefined()
       // Both stay master-push-only; that is what makes the push carve-out safe.
-      expect(job.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/master'")
+      expect(job.if).toContain("github.event_name == 'push' && github.ref == 'refs/heads/master'")
     }
 
     // Pin the post-merge runtime, Wine, and standby inventory.
@@ -489,6 +490,78 @@ describe('CI workflow', () => {
 
     expect(config).not.toContain("pool: process.platform === 'win32' ? 'threads' : 'forks'")
     expect(config.match(/pool: 'forks'/g)).toHaveLength(2)
+  })
+})
+
+describe('fork CI opt-ins', () => {
+  function enabled(expression: unknown, options: {
+    upstream?: boolean
+    event?: string
+    untrusted?: boolean
+    dependabot?: boolean
+    vars?: Record<string, string>
+    os?: string
+  } = {}): boolean {
+    if (typeof expression !== 'string') throw new TypeError('Workflow condition must be a string')
+    // These conditions use only the shared boolean subset of Actions and JavaScript.
+    const result: unknown = runInNewContext(expression, {
+      github: {
+        repository: options.upstream ? 'deepseek-ai/deepseek-harness' : 'Fritzll/deepseek-harness',
+        event_name: options.event ?? 'push',
+        ref: 'refs/heads/master',
+        event: { pull_request: {
+          head: { repo: { fork: options.untrusted ?? false } },
+          user: { login: options.dependabot ? 'dependabot[bot]' : 'contributor' },
+        } },
+      },
+      vars: options.vars ?? {},
+      inputs: { ci: true },
+      runner: { os: options.os ?? 'Linux' },
+    }, { timeout: 1000 })
+    if (typeof result !== 'boolean') throw new TypeError('Workflow condition must return a boolean')
+    return result
+  }
+
+  it('keeps paid tests opt-in on forks and rejects untrusted PRs after opt-in', () => {
+    const e2e = workflowJob(loadWorkflow('.github/workflows/e2e.yml'), 'e2e')
+    const build = workflowJob(loadWorkflow('.github/workflows/build-exe-for-python-sdk.yml'), 'build')
+    if (!Array.isArray(build.steps)) throw new TypeError('Runtime builder must define steps')
+    const paid = build.steps.filter(isRecord).filter(step => String(step.name).includes('real API'))
+    expect(paid).toHaveLength(4)
+    for (const step of [e2e, ...paid]) {
+      const os = String(step.name).includes('(Windows)') ? 'Windows' : 'Linux'
+      const vars = { DSH_CI_REAL_API: 'true' }
+      expect(enabled(step.if, { os })).toBe(false)
+      expect(enabled(step.if, { os, vars: { DSH_CI_REAL_API: 'false' } })).toBe(false)
+      expect(enabled(step.if, { os, upstream: true })).toBe(true)
+      expect(enabled(step.if, { os, vars })).toBe(true)
+      expect(enabled(step.if, { os, vars, event: 'pull_request' })).toBe(true)
+      expect(enabled(step.if, { os, vars, event: 'pull_request', untrusted: true })).toBe(false)
+      expect(enabled(step.if, { os, vars, event: 'pull_request', dependabot: true })).toBe(false)
+    }
+    expect(enabled(e2e.if, { event: 'workflow_dispatch' })).toBe(true)
+    expect(enabled(e2e.if, { event: 'schedule' })).toBe(false)
+    expect(build.steps.filter(isRecord).filter(step => String(step.name).includes('keyless')))
+      .toEqual([
+        expect.objectContaining({ if: "runner.os != 'Windows'" }),
+        expect.objectContaining({ if: "runner.os == 'Windows'" }),
+      ])
+  })
+
+  it('requires each fork runner pool to be selected before scheduling its standby', () => {
+    const master = loadWorkflow('.github/workflows/ci-master.yml')
+    for (const [job, own, other] of [
+      ['serial-linux-selfhosted', 'DSH_CI_FAILOVER_LINUX', 'DSH_CI_FAILOVER_WINDOWS'],
+      ['serial-windows', 'DSH_CI_FAILOVER_WINDOWS', 'DSH_CI_FAILOVER_LINUX'],
+    ] as const) {
+      const condition = workflowJob(master, job).if
+      expect(enabled(condition)).toBe(false)
+      expect(enabled(condition, { upstream: true })).toBe(true)
+      expect(enabled(condition, { vars: { [own]: 'selfhosted' } })).toBe(true)
+      expect(enabled(condition, { vars: { [other]: 'selfhosted' } })).toBe(false)
+      expect(enabled(condition, { event: 'pull_request', vars: { [own]: 'selfhosted' } })).toBe(false)
+      expect(enabled(condition, { event: 'workflow_dispatch', upstream: true })).toBe(false)
+    }
   })
 })
 
